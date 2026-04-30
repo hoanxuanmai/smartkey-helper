@@ -1,0 +1,6 @@
+{
+  "name": "Smartkey Emergency Helper",
+  "description": "Assist in entering emergency 9-digit code for Honda/Yamaha smartkeys.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
