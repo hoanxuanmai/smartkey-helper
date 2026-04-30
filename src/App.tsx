@@ -26,6 +26,9 @@ const i18n = {
         complete: "HOÀN TẤT!",
         completeInst: "Thành công! Hãy nhấn vào núm khóa 1 lần, vặn lên và nổ máy.",
         cancelInst: "Đã hủy. Bạn có thể làm lại từ đầu.",
+        getReady: "SẴN SÀNG?",
+        getReadyInst: "Chuẩn bị đặt tay lên núm khóa...",
+        prepareSec: "BẮT ĐẦU TRONG ({i})",
         privacy: "An toàn: Mã ID chỉ lưu trên máy bạn, không được gửi đi bất cứ đâu.",
         brand: "Hãng xe:",
         honda: "Honda",
@@ -56,6 +59,9 @@ const i18n = {
         complete: "COMPLETE!",
         completeInst: "Success! Press the knob once, turn it on and start the engine.",
         cancelInst: "Cancelled. You can start over.",
+        getReady: "GET READY?",
+        getReadyInst: "Place your hand on the knob now...",
+        prepareSec: "STARTING IN ({i})",
         privacy: "Privacy: ID is stored only on this device and is never sent elsewhere.",
         brand: "Brand:",
         honda: "Honda",
@@ -76,6 +82,8 @@ export default function App() {
   const [display, setDisplay] = useState(i18n.vi.ready);
   const [instruction, setInstruction] = useState(i18n.vi.readyInst);
   const [displayColor, setDisplayColor] = useState('text-red-500');
+  const [currentDigitIndex, setCurrentDigitIndex] = useState<number | null>(null);
+  const [currentPulse, setCurrentPulse] = useState<number>(0);
   const [isPulsing, setIsPulsing] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
@@ -103,6 +111,8 @@ export default function App() {
       setDisplay(i18n[lang].ready);
       setInstruction(isFinished ? i18n[lang].completeInst : i18n[lang].readyInst);
       if (isFinished) setDisplay(i18n[lang].complete);
+      setCurrentDigitIndex(null);
+      setCurrentPulse(0);
     }
   }, [lang, isFinished, isRunning]);
 
@@ -140,11 +150,10 @@ export default function App() {
     }
   };
 
-  const playBeep = (type: 'short' | 'long' = 'short') => {
+  const playBeep = (type: 'short' | 'long' | 'hold' = 'short', durationOverride?: number) => {
     if (!audioCtxRef.current) return;
     const ctx = audioCtxRef.current;
     
-    // Create oscillator and gain node
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
     
@@ -152,12 +161,17 @@ export default function App() {
     gainNode.connect(ctx.destination);
     
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(type === 'long' ? 600 : 900, ctx.currentTime);
+    
+    let freq = 900;
+    if (type === 'long') freq = 600;
+    if (type === 'hold') freq = 440; 
+    
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
     
     gainNode.gain.setValueAtTime(1, ctx.currentTime);
     osc.start();
     
-    const duration = type === 'long' ? 0.4 : 0.15;
+    const duration = durationOverride || (type === 'long' ? 0.4 : 0.15);
     gainNode.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + duration);
     osc.stop(ctx.currentTime + duration);
   };
@@ -170,6 +184,7 @@ export default function App() {
     setDisplayColor("text-red-500");
     setIsPulsing(false);
     setInstruction(t.cancelInst);
+    setCurrentDigitIndex(null);
     document.body.classList.remove('flash-bg');
     setIsRunning(false);
     isRunningRef.current = false;
@@ -197,19 +212,33 @@ export default function App() {
     isRunningRef.current = true;
     setIsFinished(false);
 
+    // --- BƯỚC 0: CHUẨN BỊ (3 giây để người dùng đưa tay lên núm) ---
+    setCurrentDigitIndex(null); 
+    setCurrentPulse(0);
+    setDisplay(t.getReady);
+    setDisplayColor('text-blue-400');
+    setInstruction(t.getReadyInst);
+    
+    for (let i = 3; i > 0; i--) {
+      if (!isRunningRef.current) { resetUI(lang); return; }
+      setDisplay(t.prepareSec.replace('{i}', i.toString()));
+      playBeep("short");
+      await wait(1000);
+    }
+
+    // --- BƯỚC 1: KÍCH HOẠT (Giữ núm khóa) ---
+    setCurrentDigitIndex(0); // Bắt đầu hiện số đầu tiên ở trạng thái chờ khi đang giữ núm
     setDisplay(t.holdKnob);
     setDisplayColor('text-red-500');
     setIsPulsing(true);
     setInstruction(t.holdInst);
 
-    // Timing differ for brands: Yamaha activation is usually shorter (trigger only or 5s)
-    // We stay safe with 5s as default for both but user can adjust.
-    const holdTime = 5; 
+    // Play a long continuous beep for the hold duration
+    playBeep("hold", 5);
 
-    for (let i = holdTime; i > 0; i--) {
+    for (let i = 5; i > 0; i--) {
       if (!isRunningRef.current) { resetUI(lang); return; }
       setDisplay(t.holdSec.replace('{i}', i.toString()));
-      playBeep("short");
       await wait(1000);
     }
 
@@ -219,16 +248,14 @@ export default function App() {
     for (let index = 0; index < digits.length; index++) {
       if (!isRunningRef.current) { resetUI(lang); return; }
 
+      setCurrentDigitIndex(index);
+      setCurrentPulse(0);
       const num = parseInt(digits[index], 10);
-
-      setDisplayColor("text-blue-500");
-      setDisplay(t.digitX.replace('{i}', (index + 1).toString()));
-      setInstruction(t.prepDigit.replace('{num}', num.toString()));
-      await wait(1000);
 
       if (!isRunningRef.current) { resetUI(lang); return; }
 
       if (num === 0) {
+        setDisplayColor("text-blue-500");
         setDisplay(t.skipZero);
         setInstruction(t.skipInst);
         await wait(2500);
@@ -237,6 +264,7 @@ export default function App() {
         for (let j = 1; j <= num; j++) {
           if (!isRunningRef.current) { resetUI(lang); return; }
 
+          setCurrentPulse(j);
           setDisplay(t.pressX.replace('{j}', j.toString()).replace('{num}', num.toString()));
           setInstruction(t.pressInst);
           
@@ -249,8 +277,17 @@ export default function App() {
           await wait(600);
         }
       }
-
+      
       if (!isRunningRef.current) { resetUI(lang); return; }
+      
+      // Hiển thị trước số tiếp theo trong lúc đợi đèn nháy (nếu còn)
+      if (index < digits.length - 1) {
+        setCurrentDigitIndex(index + 1);
+        setCurrentPulse(0); // Trạng thái chờ (số tối màu)
+      } else {
+        setCurrentDigitIndex(null);
+      }
+      
       setDisplayColor("text-neutral-400");
       setDisplay(t.waitFlash);
       setInstruction(t.waitInst);
@@ -312,11 +349,11 @@ export default function App() {
         </div>
       </div>
 
-      <div className="text-center">
+      <div className="text-center pt-2">
         <h1 className="text-2xl font-bold text-white mb-1 tracking-tight">{t.title}</h1>
-        <p className="text-neutral-400 text-xs mb-8">{t.subtitle}</p>
+        <p className="text-neutral-400 text-xs mb-6">{t.subtitle}</p>
         
-        <div className="relative mb-8 group">
+        <div className="relative mb-6 group">
           <input 
             type={showId ? "tel" : "password"}
             value={idInput}
@@ -338,12 +375,40 @@ export default function App() {
             {showId ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
           </button>
         </div>
+
+        {/* Current Large Digit Indicator area with controlled spacing */}
+        <div className={`${currentDigitIndex !== null ? 'min-h-[140px]' : 'min-h-[20px]'} flex items-center justify-center mb-4 transition-all duration-500`}>
+          {currentDigitIndex !== null && (
+              <div className="relative flex flex-col items-center animate-in fade-in zoom-in duration-300">
+                {/* Background Glow Ring */}
+                <div className={`absolute inset-0 rounded-full blur-3xl opacity-20 transition-all duration-300 ${currentPulse > 0 ? 'bg-blue-500 scale-150 opacity-40' : 'bg-transparent'}`}></div>
+                
+                <div className="text-neutral-500 text-[10px] font-black uppercase tracking-[0.2em] mb-1 relative z-10">
+                    {t.digitX.replace('{i}', (currentDigitIndex + 1).toString())}
+                </div>
+                
+                <div className="relative flex items-center justify-center">
+                    {/* Spinning/Pulsing border when active */}
+                    {currentPulse > 0 && (
+                        <div className="absolute w-32 h-32 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div>
+                    )}
+                    
+                    <div 
+                        key={currentPulse} 
+                        className={`text-8xl font-black tabular-nums transition-all duration-150 relative z-10 ${currentPulse > 0 ? 'text-blue-500 scale-110 drop-shadow-[0_0_20px_rgba(59,130,246,0.6)]' : 'text-neutral-700 scale-100'}`}
+                    >
+                        {idInput[currentDigitIndex]}
+                    </div>
+                </div>
+              </div>
+          )}
+        </div>
         
-        <div className={`text-3xl sm:text-4xl font-black mb-4 min-h-[5rem] flex items-center justify-center uppercase tracking-wide ${displayColor} ${isPulsing ? 'pulse' : ''} transition-colors duration-300`}>
+        <div className={`text-2xl sm:text-3xl font-black mb-4 min-h-[4rem] flex items-center justify-center uppercase tracking-wide ${displayColor} ${isPulsing ? 'pulse' : ''} transition-colors duration-300`}>
           {display}
         </div>
         
-        <div className="text-neutral-400 text-base sm:text-lg min-h-[4rem] mb-8 leading-relaxed px-2">
+        <div className="text-neutral-400 text-sm sm:text-base min-h-[3rem] mb-6 leading-relaxed px-5">
           {instruction}
         </div>
         
