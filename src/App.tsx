@@ -26,6 +26,8 @@ const i18n = {
         complete: "HOÀN TẤT!",
         completeInst: "Thành công! Hãy nhấn vào núm khóa 1 lần, vặn lên và nổ máy.",
         cancelInst: "Đã hủy. Bạn có thể làm lại từ đầu.",
+        pressKnobOnce: "NHẤN NÚM 1 LẦN",
+        pressKnobInst: "Bây giờ hãy nhấn vào núm khóa (hoặc nút Smartkey) 1 lần để xác nhận.",
         getReady: "SẴN SÀNG?",
         getReadyInst: "Chuẩn bị đặt tay lên núm khóa...",
         prepareSec: "BẮT ĐẦU TRONG ({i})",
@@ -33,7 +35,9 @@ const i18n = {
         brand: "Hãng xe:",
         honda: "Honda",
         yamaha: "Yamaha",
-        wakeLockErr: "Lưu ý: Trình duyệt không hỗ trợ giữ màn hình sáng."
+        wakeLockErr: "Lưu ý: Trình duyệt không hỗ trợ giữ màn hình sáng.",
+        waitFlashLabel: "Thời gian đợi đèn nháy:",
+        waitFlashUnit: "giây"
     },
     en: {
         title: "Emergency Start Assist",
@@ -59,6 +63,8 @@ const i18n = {
         complete: "COMPLETE!",
         completeInst: "Success! Press the knob once, turn it on and start the engine.",
         cancelInst: "Cancelled. You can start over.",
+        pressKnobOnce: "PRESS KNOB ONCE",
+        pressKnobInst: "Now press the knob (or Smartkey button) once to confirm.",
         getReady: "GET READY?",
         getReadyInst: "Place your hand on the knob now...",
         prepareSec: "STARTING IN ({i})",
@@ -66,7 +72,9 @@ const i18n = {
         brand: "Brand:",
         honda: "Honda",
         yamaha: "Yamaha",
-        wakeLockErr: "Notice: Browser does not support keep-screen-on."
+        wakeLockErr: "Notice: Browser does not support keep-screen-on.",
+        waitFlashLabel: "Wait for flash duration:",
+        waitFlashUnit: "sec"
     }
 } as const;
 
@@ -76,6 +84,7 @@ type Brand = 'honda' | 'yamaha';
 export default function App() {
   const [lang, setLang] = useState<Lang>('vi');
   const [brand, setBrand] = useState<Brand>('honda');
+  const [waitFlashTime, setWaitFlashTime] = useState(5);
   const [idInput, setIdInput] = useState('');
   const [showId, setShowId] = useState(false);
   
@@ -86,11 +95,13 @@ export default function App() {
   const [currentPulse, setCurrentPulse] = useState<number>(0);
   const [isPulsing, setIsPulsing] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const [isWaitingForConfirm, setIsWaitingForConfirm] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
 
   const isRunningRef = useRef(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const wakeLockRef = useRef<any>(null);
+  const confirmResolverRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const savedLang = localStorage.getItem('smartkey_lang') as Lang;
@@ -103,6 +114,8 @@ export default function App() {
     }
     const savedBrand = localStorage.getItem('smartkey_brand') as Brand;
     if (savedBrand) setBrand(savedBrand);
+    const savedWaitTime = localStorage.getItem('smartkey_wait_time');
+    if (savedWaitTime) setWaitFlashTime(parseInt(savedWaitTime, 10));
   }, []);
 
   useEffect(() => {
@@ -243,6 +256,18 @@ export default function App() {
     }
 
     setIsPulsing(false);
+
+    // --- BƯỚC 2: HƯỚNG DẪN NHẤN NÚM (Xác nhận trên xe) ---
+    if (!isRunningRef.current) { resetUI(lang); return; }
+    
+    setDisplay(t.pressKnobOnce);
+    setDisplayColor("text-green-400");
+    setInstruction(t.pressKnobInst);
+    
+    await wait(3000); // Đợi 3 giây để người dùng nhấn nút trên xe
+
+    if (!isRunningRef.current) { resetUI(lang); return; }
+
     const digits = id.split('');
 
     for (let index = 0; index < digits.length; index++) {
@@ -252,13 +277,25 @@ export default function App() {
       setCurrentPulse(0);
       const num = parseInt(digits[index], 10);
 
+      // --- NEW STEP: WAIT FOR FLASH BEFORE STARTING THIS DIGIT (EXCEPT FIRST ONE) ---
+      if (index > 0) {
+        setDisplayColor("text-neutral-400");
+        setInstruction(t.waitInst);
+        
+        for (let w = waitFlashTime; w > 0; w--) {
+          if (!isRunningRef.current) { resetUI(lang); return; }
+          setDisplay(`${t.waitFlash} (${w}s)`);
+          await wait(1000);
+        }
+      }
+
       if (!isRunningRef.current) { resetUI(lang); return; }
 
       if (num === 0) {
         setDisplayColor("text-blue-500");
         setDisplay(t.skipZero);
         setInstruction(t.skipInst);
-        await wait(2500);
+        await wait(500);
       } else {
         setDisplayColor("text-red-500");
         for (let j = 1; j <= num; j++) {
@@ -283,15 +320,8 @@ export default function App() {
       // Hiển thị trước số tiếp theo trong lúc đợi đèn nháy (nếu còn)
       if (index < digits.length - 1) {
         setCurrentDigitIndex(index + 1);
-        setCurrentPulse(0); // Trạng thái chờ (số tối màu)
-      } else {
-        setCurrentDigitIndex(null);
+        setCurrentPulse(0); 
       }
-      
-      setDisplayColor("text-neutral-400");
-      setDisplay(t.waitFlash);
-      setInstruction(t.waitInst);
-      await wait(1500);
     }
 
     if (isRunningRef.current) {
@@ -346,6 +376,31 @@ export default function App() {
                 <option value="en">🇬🇧 EN</option>
             </select>
             <Globe className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-neutral-400 pointer-events-none" />
+        </div>
+      </div>
+
+      {/* Settings Bar */}
+      <div className="mb-8 p-3 bg-[#121212] rounded-xl flex items-center justify-between ring-1 ring-white/5">
+        <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">
+          {t.waitFlashLabel}
+        </label>
+        <div className="flex items-center gap-2">
+           <input 
+            type="number" 
+            min="1" 
+            max="60"
+            value={waitFlashTime}
+            disabled={isRunning}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              if (!isNaN(v)) {
+                setWaitFlashTime(v);
+                localStorage.setItem('smartkey_wait_time', v.toString());
+              }
+            }}
+            className="w-12 bg-[#1e1e1e] border border-neutral-800 rounded px-1.5 py-0.5 text-center text-xs font-bold text-white outline-none focus:border-blue-500"
+          />
+          <span className="text-[10px] text-neutral-500 font-bold uppercase">{t.waitFlashUnit}</span>
         </div>
       </div>
 
